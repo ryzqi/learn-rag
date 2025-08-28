@@ -1,134 +1,219 @@
 from LLM import GeminiLLM
 from file_reader import file_reader_service
 from embedding import embedding_service
-import numpy as np
+from milvus_client import milvus_service
+import hashlib
+from typing import List, Dict, Any
 
 
 class SimpleRAG:
-    def __init__(self, chunk_size=500, overlap=100, batch_size=64):
+    def __init__(
+        self, chunk_size=1000, overlap=200, batch_size=64, collection_name="RAG_learn"
+    ):
         """
         初始化SimpleRAG类
         Args:
             chunk_size (int): 每个文本块的最大长度，默认1000
             overlap (int): 相邻块之间的重叠长度，默认200
             batch_size (int): 批处理大小，默认64
+            collection_name (str): Milvus集合名称，必须指定
         """
-        self.client = GeminiLLM()
+        self.llm_client = GeminiLLM()
+        self.file_reader = file_reader_service
+        self.embedding_client = embedding_service
+        self.milvus_client = milvus_service
+
         self.chunk_size = chunk_size
         self.overlap = overlap
         self.batch_size = batch_size
-        self.text_chunks = []
-        self.embeddings = []
-        self.system_prompt = "你是一个AI助手，严格根据给定的上下文进行回答。如果无法直接从提供的上下文中得出答案，请回复：'我没有足够的信息来回答这个问题。'"
+        self.collection_name = collection_name
 
-    def chunk_text(self, text, n=None, overlap=None):
+        self.system_prompt = (
+            "你是一个AI助手，严格根据给定的上下文进行回答。"
+            "如果无法直接从提供的上下文中得出答案，请回复：'我没有足够的信息来回答这个问题。'"
+        )
+
+    def chunk_text(self, text: str) -> List[str]:
         """
-        对文本进行分块处理，确保每个块的长度不超过n，并且相邻块之间有overlap的重叠部分。
+        将文本分割成重叠的块
+
         Args:
-            text (str): 输入的文本字符串。
-            n (int): 每个块的最大长度，如果为None则使用实例的chunk_size。
-            overlap (int): 相邻块之间的重叠长度，如果为None则使用实例的overlap。
+            text: 输入文本
+
+        Returns:
+            文本块列表
         """
-        if n is None:
-            n = self.chunk_size
-        if overlap is None:
-            overlap = self.overlap
+        if not text or not text.strip():
+            raise ValueError("文本不能为空")
 
         chunks = []
-        for i in range(0, len(text), n - overlap):
-            chunks.append(text[i : i + n])
+        step = self.chunk_size - self.overlap
+
+        for i in range(0, len(text), step):
+            chunk = text[i : i + self.chunk_size]
+            if chunk.strip():  # 只添加非空块
+                chunks.append(chunk)
+
         return chunks
 
-    def cosine_similarity(self, vec1, vec2):
-        """计算两个向量的余弦相似度"""
-        return np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
+    def _batch_embed_texts(self, texts: List[str]) -> List[List[float]]:
+        """批量生成文本的嵌入向量"""
+        if not texts:
+            raise ValueError("文本列表不能为空")
 
-    def semantic_search(self, query, k=5):
+        try:
+            # 如果文本数量超过批处理大小，分批处理
+            if len(texts) <= self.batch_size:
+                return self.embedding_client.embed_texts(texts)
+            
+            # 分批处理大量文本
+            all_embeddings = []
+            for i in range(0, len(texts), self.batch_size):
+                batch = texts[i:i + self.batch_size]
+                batch_embeddings = self.embedding_client.embed_texts(batch)
+                all_embeddings.extend(batch_embeddings)
+            
+            return all_embeddings
+        except Exception as e:
+            raise Exception(f"嵌入向量生成失败: {e}")
+
+    def search(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         """
-        语义搜索，返回与查询最相似的k个文本块
+        使用语义相似度搜索相关文档
+
         Args:
-            query (str): 查询文本
-            k (int): 返回的文本块数量，默认5
+            query: 搜索查询文本
+            limit: 返回的最大结果数
+
+        Returns:
+            搜索结果列表
         """
-        if not self.text_chunks or not self.embeddings:
-            raise ValueError("请先加载文档并生成嵌入向量")
+        if not query or not query.strip():
+            raise ValueError("查询不能为空")
 
-        # embed_text 返回的是 List[float]，不需要 [0] 索引
-        query_embedding = embedding_service.embed_text(query)
-        similarity_scores = []
-
-        for i, chunk_embedding in enumerate(self.embeddings):
-            similarity_score = self.cosine_similarity(
-                np.array(query_embedding), np.array(chunk_embedding)
+        try:
+            return self.milvus_client.search_by_text(
+                collection_name=self.collection_name,
+                text=query,
+                limit=limit,
+                output_fields=["text", "source", "chunk_index"],
+                metric_type="COSINE",
+                embedding_client=self.embedding_client,
             )
-            # 确保相似度分数是标量值
-            if isinstance(similarity_score, np.ndarray):
-                similarity_score = similarity_score.item()
-            similarity_scores.append((i, similarity_score))
+        except Exception as e:
+            raise Exception(f"搜索失败: {e}")
 
-        similarity_scores.sort(key=lambda x: x[1], reverse=True)
-        top_indices = [index for index, _ in similarity_scores[:k]]
-        return [self.text_chunks[i] for i in top_indices]
-
-    def load_document(self, file_path):
+    def process_document(self, file_path: str) -> Dict[str, Any]:
         """
-        加载文档并生成文本块和嵌入向量
+        处理文档并存储到向量数据库
+
         Args:
-            file_path (str): 文件路径
-        """
-        text = file_reader_service.read_file(file_path)
-        self.text_chunks = self.chunk_text(text)
+            file_path: 文件路径
 
-        # 生成嵌入向量
-        self.embeddings = []
-        for i in range(0, len(self.text_chunks), self.batch_size):
-            batch = self.text_chunks[i : i + self.batch_size]
-            if batch:  # 确保批次不为空
-                self.embeddings.extend(embedding_service.embed_texts(batch))
-
-    def generate_response(self, user_message, system_prompt=None):
+        Returns:
+            处理结果字典
         """
-        生成回答
+        try:
+            # 读取文档并分块
+            text = self.file_reader.read_file(file_path)
+            text_chunks = self.chunk_text(text)
+
+            if not text_chunks:
+                raise ValueError("文档分块后没有有效内容")
+
+            # 批量生成嵌入向量
+            embeddings = self._batch_embed_texts(text_chunks)
+
+            # 准备插入数据
+            data_to_insert = []
+            for i, (chunk, embedding) in enumerate(zip(text_chunks, embeddings)):
+                chunk_id = self._generate_chunk_id(file_path, i)
+                data_to_insert.append(
+                    {
+                        "id": chunk_id,
+                        "vector": embedding,
+                        "text": chunk,
+                        "source": file_path,
+                        "chunk_index": i,
+                    }
+                )
+
+            # 批量插入到Milvus
+            result = self.milvus_client.insert_data(
+                self.collection_name, data_to_insert
+            )
+
+            return {
+                "success": True,
+                "chunks_count": len(text_chunks),
+                "file_path": file_path,
+                **result,
+            }
+
+        except Exception as e:
+            return {"success": False, "error": str(e), "file_path": file_path}
+
+    def generate_response(self, query: str, context: str) -> str:
+        """
+        基于查询和上下文生成响应
+
         Args:
-            user_message (str): 用户消息
-            system_prompt (str): 系统提示，如果为None则使用实例的system_prompt
-        """
-        if system_prompt is None:
-            system_prompt = self.system_prompt
+            query: 用户的问题
+            context: 从搜索结果检索的上下文
 
-        response = self.client.generate_text(
-            user_message, system_instruction=system_prompt
+        Returns:
+            生成的响应文本
+        """
+        if not context or not context.strip():
+            return "我没有找到相关的信息来回答这个问题。"
+
+        user_prompt = f"上下文:\n{context}\n\n用户问题：{query}"
+        return self.llm_client.generate_text(
+            user_prompt, system_instruction=self.system_prompt
         )
-        return response
 
-    def query(self, question, k=5, return_chunks=False):
+    def query(self, question: str, limit: int = 5) -> str:
         """
-        查询问题并生成回答
+        完整的查询流水线：搜索、准备上下文和生成响应
+
         Args:
-            question (str): 用户问题
-            k (int): 检索的文本块数量，默认5
-            return_chunks (bool): 是否返回检索到的文本块，默认False
+            question: 用户的问题
+            limit: 最大搜索结果数
+
+        Returns:
+            生成的回答
         """
-        # 检索相关文本块
-        top_chunks = self.semantic_search(question, k=k)
+        if not question or not question.strip():
+            raise ValueError("问题不能为空")
 
-        # 构建用户提示
-        context_parts = []
-        for i, chunk in enumerate(top_chunks):
-            context_parts.append(f"上下文内容{i + 1}:\n{chunk}")
+        try:
+            # 搜索相关文档
+            search_results = self.search(question, limit)
 
-        user_prompt = "\n\n".join(context_parts) + f"\n\n用户问题：{question}"
+            # 准备上下文
+            context_parts = []
+            for i, result in enumerate(search_results):
+                # 正确访问Milvus搜索结果的结构
+                text = (
+                    result.get("entity", {}).get("text", "")
+                    if "entity" in result
+                    else result.get("text", "")
+                )
+                if text.strip():
+                    context_parts.append(f"上下文{i + 1}:\n{text}")
 
-        # 生成回答
-        response = self.generate_response(user_prompt)
+            context = "\n\n".join(context_parts)
 
-        if return_chunks:
-            return response, top_chunks
-        return response
+            # 生成响应
+            return self.generate_response(question, context)
 
-    def set_system_prompt(self, prompt):
-        """设置系统提示"""
-        self.system_prompt = prompt
+        except Exception as e:
+            return f"查询处理失败: {e}"
+
+    def _generate_chunk_id(self, file_path: str, chunk_index: int) -> str:
+        """生成文本块的唯一ID"""
+        content = f"{file_path}_{chunk_index}"
+        return hashlib.md5(content.encode()).hexdigest()
 
 
 # 示例用法
@@ -136,13 +221,16 @@ if __name__ == "__main__":
     # 创建SimpleRAG实例
     rag = SimpleRAG()
 
-    # 加载文档
-    file_path = "test.pdf"
-    rag.load_document(file_path)
+    try:
+        # 处理文档（取消注释以使用）
+        result = rag.process_document("Agent基础.md")
+        print(f"处理结果: {result}")
 
-    # 查询问题
-    query = "什么是‘可解释人工智能’，为什么它被认为很重要？"
-    response = rag.query(query)
+        # 查询问题
+        query = "思维链是什么？举个例子"
+        response = rag.query(query)
 
-    # 打印回答
-    print(response)
+        print(f"查询: {query}")
+        print(f"回答: {response}")
+    except Exception as e:
+        print(f"错误: {e}")

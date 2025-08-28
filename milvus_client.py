@@ -1217,7 +1217,7 @@ class MilvusClient:
         search_params: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
         filter_expr: Optional[str] = None,
-        metric_type: str = "L2",
+        metric_type: str = "COSINE",
         embedding_client=None,
         **kwargs,
     ) -> List[Dict[str, Any]]:
