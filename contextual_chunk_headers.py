@@ -92,25 +92,25 @@ class ContextualChunkProcessor:
 
             # 生成文本块和标题
             self._text_chunks = self.chunk_text_with_headers(text)
-            
+
             if not self._text_chunks:
                 raise ValueError("文档分块后没有有效内容")
 
             # 批量生成嵌入向量并存储到Milvus
             result = self._generate_and_store_embeddings(file_path, self._text_chunks)
-            
+
             return {
                 "success": True,
                 "chunks_count": len(self._text_chunks),
                 "file_path": file_path,
-                **result
+                **result,
             }
 
         except Exception as e:
             return {
                 "success": False,
                 "error": f"文件处理失败: {e}",
-                "file_path": file_path
+                "file_path": file_path,
             }
 
     def chunk_text_with_headers(self, text: str) -> List[Dict[str, str]]:
@@ -144,19 +144,19 @@ class ContextualChunkProcessor:
         """批量生成文本嵌入向量，包含错误处理"""
         if not texts:
             raise ValueError("文本列表不能为空")
-        
+
         try:
             # 如果文本数量超过批处理大小，分批处理
             if len(texts) <= self.batch_size:
                 return self.embedding_client.embed_texts(texts)
-            
+
             # 分批处理大量文本
             all_embeddings = []
             for i in range(0, len(texts), self.batch_size):
-                batch = texts[i:i + self.batch_size]
+                batch = texts[i : i + self.batch_size]
                 batch_embeddings = self.embedding_client.embed_texts(batch)
                 all_embeddings.extend(batch_embeddings)
-            
+
             return all_embeddings
         except Exception as e:
             raise Exception(f"嵌入向量生成失败: {e}")
@@ -175,16 +175,46 @@ class ContextualChunkProcessor:
             raise ValueError("查询文本不能为空")
 
         try:
-            # 使用Milvus的文本搜索功能
-            return self.milvus_client.search_by_text(
+            # 生成查询嵌入向量
+            query_embedding = self.embedding_client.embed_text(query.strip())
+            
+            # 使用Milvus进行文本向量搜索，获取较多候选结果
+            text_results = self.milvus_client.search_by_vector(
                 collection_name=self.collection_name,
-                text=query,
-                limit=limit,
-                output_fields=["text", "header", "source", "chunk_index"],
-                metric_type="COSINE",
-                embedding_client=self.embedding_client
+                vector=query_embedding,
+                vector_field="text_vector",
+                limit=limit * 3,  # 获取更多候选以便重新排序
+                output_fields=["text", "header", "source", "chunk_index", "text_vector", "header_vector"],
+                metric_type="COSINE"
             )
             
+            if not text_results:
+                return []
+            
+            # 重新计算相似度分数
+            similarities = []
+            for result in text_results:
+                entity = result.get("entity", result)
+                
+                # 分别计算文本和标题的余弦相似度
+                text_vector = entity.get("text_vector", [])
+                header_vector = entity.get("header_vector", [])
+                
+                if text_vector and header_vector:
+                    sim_text = self._cosine_similarity(query_embedding, text_vector)
+                    sim_header = self._cosine_similarity(query_embedding, header_vector)
+                    
+                    # 计算平均相似度分数（与网页实现一致）
+                    avg_similarity = (sim_text + sim_header) / 2
+                    
+                    similarities.append((result, avg_similarity))
+            
+            # 按相似度分数降序排序
+            similarities.sort(key=lambda x: x[1], reverse=True)
+            
+            # 返回top-k最相关的块
+            return [x[0] for x in similarities[:limit]]
+
         except Exception as e:
             raise Exception(f"语义搜索失败: {e}")
 
@@ -204,16 +234,22 @@ class ContextualChunkProcessor:
         try:
             # 检索相关文本块
             top_chunks = self.search(query, limit)
-            
+
             if not top_chunks:
                 return "我没有找到相关的信息来回答这个问题。"
 
             # 构建上下文
-            context = "\n".join([
-                f"上下文 {i + 1} - {chunk.get('entity', {}).get('header', '') if 'entity' in chunk else chunk.get('header', '')}:\n{chunk.get('entity', {}).get('text', '') if 'entity' in chunk else chunk.get('text', '')}"
-                for i, chunk in enumerate(top_chunks)
-                if (chunk.get('entity', {}).get('text', '') if 'entity' in chunk else chunk.get('text', '')).strip()
-            ])
+            context = "\n".join(
+                [
+                    f"上下文 {i + 1} - {chunk.get('entity', {}).get('header', '') if 'entity' in chunk else chunk.get('header', '')}:\n{chunk.get('entity', {}).get('text', '') if 'entity' in chunk else chunk.get('text', '')}"
+                    for i, chunk in enumerate(top_chunks)
+                    if (
+                        chunk.get("entity", {}).get("text", "")
+                        if "entity" in chunk
+                        else chunk.get("text", "")
+                    ).strip()
+                ]
+            )
 
             # 构建用户提示
             user_prompt = f"{context}\n\n问题: {query}"
@@ -250,8 +286,12 @@ class ContextualChunkProcessor:
                 "answer": answer,
                 "relevant_chunks": [
                     {
-                        "text": chunk.get("entity", {}).get("text", "") if "entity" in chunk else chunk.get("text", ""),
-                        "header": chunk.get("entity", {}).get("header", "") if "entity" in chunk else chunk.get("header", "")
+                        "text": chunk.get("entity", {}).get("text", "")
+                        if "entity" in chunk
+                        else chunk.get("text", ""),
+                        "header": chunk.get("entity", {}).get("header", "")
+                        if "entity" in chunk
+                        else chunk.get("header", ""),
                     }
                     for chunk in relevant_chunks
                 ],
@@ -280,7 +320,9 @@ class ContextualChunkProcessor:
         )
         return response.strip()
 
-    def _generate_and_store_embeddings(self, file_path: str, chunks: List[Dict[str, str]]) -> Dict[str, Any]:
+    def _generate_and_store_embeddings(
+        self, file_path: str, chunks: List[Dict[str, str]]
+    ) -> Dict[str, Any]:
         """生成嵌入向量并存储到Milvus"""
         try:
             # 收集所有文本和标题用于批量处理
@@ -290,31 +332,31 @@ class ContextualChunkProcessor:
             # 批量生成嵌入向量
             text_embeddings = self._batch_embed_texts(texts)
             header_embeddings = self._batch_embed_texts(headers)
-            
+
             # 准备插入数据
             data_to_insert = []
             for i, chunk in enumerate(chunks):
                 chunk_id = self._generate_chunk_id(file_path, i)
-                
-                # 合并文本和标题嵌入向量（使用平均值）
-                import numpy as np
-                text_emb = np.array(text_embeddings[i])
-                header_emb = np.array(header_embeddings[i])
-                combined_embedding = (text_emb + header_emb) / 2  # 使用平均值
-                
-                data_to_insert.append({
-                    "id": chunk_id,
-                    "vector": combined_embedding.tolist(),
-                    "text": chunk["text"],
-                    "header": chunk["header"],
-                    "source": file_path,
-                    "chunk_index": i
-                })
-            
+
+                # 分别存储文本和标题嵌入向量（与网页实现一致）
+                data_to_insert.append(
+                    {
+                        "id": chunk_id,
+                        "text_vector": text_embeddings[i],
+                        "header_vector": header_embeddings[i],
+                        "text": chunk["text"],
+                        "header": chunk["header"],
+                        "source": file_path,
+                        "chunk_index": i,
+                    }
+                )
+
             # 批量插入到Milvus
-            result = self.milvus_client.insert_data(self.collection_name, data_to_insert)
+            result = self.milvus_client.insert_data(
+                self.collection_name, data_to_insert
+            )
             return result
-            
+
         except Exception as e:
             raise Exception(f"存储到Milvus失败: {e}")
 
@@ -322,6 +364,31 @@ class ContextualChunkProcessor:
         """生成文本块的唯一ID"""
         content = f"{file_path}_{chunk_index}"
         return hashlib.md5(content.encode()).hexdigest()
+
+    @staticmethod
+    def _cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
+        """计算两个向量的余弦相似度
+        
+        Args:
+            vec1: 第一个向量
+            vec2: 第二个向量
+            
+        Returns:
+            余弦相似度分数
+        """
+        import numpy as np
+        
+        vec1_array = np.array(vec1)
+        vec2_array = np.array(vec2)
+        
+        dot_product = np.dot(vec1_array, vec2_array)
+        norm1 = np.linalg.norm(vec1_array)
+        norm2 = np.linalg.norm(vec2_array)
+        
+        if norm1 == 0 or norm2 == 0:
+            return 0.0
+            
+        return dot_product / (norm1 * norm2)
 
     @property
     def chunk_count(self) -> int:
@@ -339,7 +406,7 @@ if __name__ == "__main__":
 
     try:
         # 处理文件（取消注释以使用）
-        result = processor.process_file("Agent基础.md")
+        # result = processor.process_file("Agent基础.md")
         # print(f"处理结果: {result}")
 
         # 执行查询

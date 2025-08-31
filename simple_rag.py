@@ -223,8 +223,8 @@ if __name__ == "__main__":
 
     try:
         # 处理文档（取消注释以使用）
-        result = rag.process_document("Agent基础.md")
-        print(f"处理结果: {result}")
+        # result = rag.process_document("Agent基础.md")
+        # print(f"处理结果: {result}")
 
         # 查询问题
         query = "思维链是什么？举个例子"
