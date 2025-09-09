@@ -1178,28 +1178,105 @@ class MilvusClient:
                 for result_group in results:
                     if hasattr(result_group, "__iter__"):
                         for hit in result_group:
+                            distance = getattr(hit, "distance", None)
+                            
+                            # 根据距离度量类型计算相似度分数
+                            score = None
+                            if distance is not None:
+                                if metric_type.upper() == "COSINE":
+                                    # COSINE距离转相似度：1 - distance
+                                    score = 1.0 - distance
+                                elif metric_type.upper() == "IP":
+                                    # IP (内积) 本身就是相似度，但通常需要归一化
+                                    score = distance
+                                elif metric_type.upper() == "L2":
+                                    # L2距离转相似度：1 / (1 + distance)
+                                    score = 1.0 / (1.0 + distance)
+                                else:
+                                    # 默认处理
+                                    score = 1.0 - distance if distance <= 1.0 else 1.0 / (1.0 + distance)
+                            
                             hit_dict = {
                                 "id": getattr(hit, "id", None),
-                                "distance": getattr(hit, "distance", None),
-                                "score": getattr(hit, "score", None),
+                                "distance": distance,
+                                "score": score,
                             }
-                            # 添加其他字段
+                            
+                            # 修复：正确处理Hit对象的entity属性
                             if hasattr(hit, "entity"):
-                                hit_dict.update(hit.entity)
+                                entity = hit.entity
+                                # entity本身就是Hit对象，使用get方法获取字段
+                                if hasattr(entity, 'get'):
+                                    # 获取所有可能的字段
+                                    if output_fields:
+                                        for field in output_fields:
+                                            field_value = entity.get(field)
+                                            if field_value is not None:
+                                                hit_dict[field] = field_value
+                                    else:
+                                        # 如果没有指定output_fields，尝试获取常见字段
+                                        for field in ['text', 'metadata']:
+                                            field_value = entity.get(field)
+                                            if field_value is not None:
+                                                hit_dict[field] = field_value
+                                
+                                # 保持entity结构用于向后兼容
+                                hit_dict["entity"] = {
+                                    "text": entity.get("text"),
+                                    "metadata": entity.get("metadata", {}),
+                                }
+                                # 确保entity中也有score
+                                hit_dict["entity"]["score"] = score
+                                
                             elif hasattr(hit, "fields"):
                                 hit_dict.update(hit.fields)
+                                
                             processed_results.append(hit_dict)
                     else:
                         # 单个结果的情况
+                        distance = getattr(result_group, "distance", None)
+                        
+                        # 根据距离度量类型计算相似度分数
+                        score = None
+                        if distance is not None:
+                            if metric_type.upper() == "COSINE":
+                                score = 1.0 - distance
+                            elif metric_type.upper() == "IP":
+                                score = distance
+                            elif metric_type.upper() == "L2":
+                                score = 1.0 / (1.0 + distance)
+                            else:
+                                score = 1.0 - distance if distance <= 1.0 else 1.0 / (1.0 + distance)
+                        
                         hit_dict = {
                             "id": getattr(result_group, "id", None),
-                            "distance": getattr(result_group, "distance", None),
-                            "score": getattr(result_group, "score", None),
+                            "distance": distance,
+                            "score": score,
                         }
+                        
+                        # 同样的处理逻辑
                         if hasattr(result_group, "entity"):
-                            hit_dict.update(result_group.entity)
+                            entity = result_group.entity
+                            if hasattr(entity, 'get'):
+                                if output_fields:
+                                    for field in output_fields:
+                                        field_value = entity.get(field)
+                                        if field_value is not None:
+                                            hit_dict[field] = field_value
+                                else:
+                                    for field in ['text', 'metadata']:
+                                        field_value = entity.get(field)
+                                        if field_value is not None:
+                                            hit_dict[field] = field_value
+                                
+                                hit_dict["entity"] = {
+                                    "text": entity.get("text"),
+                                    "metadata": entity.get("metadata", {}),
+                                    "score": score
+                                }
                         elif hasattr(result_group, "fields"):
                             hit_dict.update(result_group.fields)
+                            
                         processed_results.append(hit_dict)
 
             return processed_results

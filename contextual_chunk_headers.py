@@ -204,7 +204,7 @@ class ContextualChunkProcessor:
                     sim_text = self._cosine_similarity(query_embedding, text_vector)
                     sim_header = self._cosine_similarity(query_embedding, header_vector)
                     
-                    # 计算平均相似度分数（与网页实现一致）
+                    # 计算平均相似度分数
                     avg_similarity = (sim_text + sim_header) / 2
                     
                     similarities.append((result, avg_similarity))
@@ -338,7 +338,7 @@ class ContextualChunkProcessor:
             for i, chunk in enumerate(chunks):
                 chunk_id = self._generate_chunk_id(file_path, i)
 
-                # 分别存储文本和标题嵌入向量（与网页实现一致）
+                # 分别存储文本和标题嵌入向量
                 data_to_insert.append(
                     {
                         "id": chunk_id,

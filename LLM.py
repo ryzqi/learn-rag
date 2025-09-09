@@ -14,7 +14,7 @@ class GeminiLLM:
     支持Gemini 2.5 Flash模型进行文本生成。
     """
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "gemini-2.5-flash"):
+    def __init__(self, api_key: Optional[str] = None, model: str = "gemini-2.5-flash-lite"):
         """
         初始化Gemini LLM客户端。
 
