@@ -112,8 +112,7 @@ class FusionRAG:
                 }
                 chunks.append(chunk_data)
         
-        print(f"创建了 {len(chunks)} 个文本块")  # 打印创建的块数
-        return chunks  # 返回块列表
+        return chunks  # 返回块列表  # 返回块列表
     
     def clean_text(self, text: str) -> str:
         """
@@ -396,15 +395,10 @@ class FusionRAG:
             - retrieval_method: 使用的检索方法
             - metadata: 查询元数据（如果include_metadata为True）
         """
-        print("\n=== FUSION RAG QUERY ===")
-        print(f"Query: {query_text}")
-        
         k = k or self.default_k
         
         # 执行融合检索
         retrieved_docs = self.fusion_search(query_text, k)
-        
-        print(f"Retrieved {len(retrieved_docs)} documents using fusion search")
         
         # 构建上下文
         context = "\n\n---\n\n".join([doc["text"] for doc in retrieved_docs])
@@ -445,8 +439,8 @@ if __name__ == "__main__":
 
     try:
         # 处理文档（取消注释以使用）
-        # result = rag.process_document("Agent基础.md")
-        # print(f"处理结果: {result}")
+        result = rag.process_document("Agent基础.md")
+        print(f"处理结果: {result}")
 
         # 进行查询
         query = "思维链(CoT)是什么？举个例子"
