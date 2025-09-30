@@ -5,6 +5,10 @@
 支持文档处理、向量检索和重排序优化，以提升检索质量和回答准确性。
 """
 
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import logging
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass

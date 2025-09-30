@@ -5,6 +5,10 @@
 支持基于上下文的文本分块，为每个文本块生成描述性标题，并提供语义搜索和问答功能。
 """
 
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from typing import List, Optional, Dict, Any
 from LLM import GeminiLLM
 from file_reader import file_reader_service, FileReader

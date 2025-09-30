@@ -1,3 +1,7 @@
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from rank_bm25 import BM25Okapi
 import jieba
 from typing import List, Dict, Any

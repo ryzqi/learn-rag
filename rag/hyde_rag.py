@@ -5,6 +5,10 @@ HyDE RAG (Hypothetical Document Embeddings RAG) 系统
 不同于传统 RAG 的查询-文档匹配，HyDE 使用文档-文档匹配提高检索精度。
 """
 
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
 from LLM import GeminiLLM

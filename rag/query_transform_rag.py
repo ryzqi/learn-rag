@@ -5,6 +5,10 @@
 支持查询重写、回退查询和查询分解等多种查询转换策略，以提升检索效果。
 """
 
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import logging
 import re
 from typing import List, Optional, Dict, Any

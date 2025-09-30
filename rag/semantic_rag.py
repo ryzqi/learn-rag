@@ -1,3 +1,7 @@
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from LLM import GeminiLLM
 from file_reader import file_reader_service
 from embedding import embedding_service
