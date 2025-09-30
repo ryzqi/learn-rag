@@ -4,7 +4,7 @@ from embedding import embedding_service
 from milvus_client import milvus_service
 import hashlib
 import fitz  # PyMuPDF for PDF processing
-from typing import List, Dict, Any, Generator
+from typing import List, Dict, Any
 import os
 import gc
 
@@ -36,7 +36,7 @@ class HierarchyRAG:
         k_summaries: int = 3,
         k_chunks: int = 5,
         batch_size: int = 64,
-        temperature: float = 0.2
+        temperature: float = 0.2,
     ):
         """
         初始化层次化RAG实例
@@ -134,8 +134,8 @@ class HierarchyRAG:
                         "metadata": {
                             "source": pdf_path,
                             "page": page_num + 1,  # 页码从1开始
-                            "total_pages": total_pages
-                        }
+                            "total_pages": total_pages,
+                        },
                     }
                     pages.append(page_data)
 
@@ -143,7 +143,7 @@ class HierarchyRAG:
             raise ValueError(f"PDF文件损坏或无法读取: {e}")
         except fitz.EmptyFileError as e:
             raise ValueError(f"PDF文件为空: {e}")
-        except PermissionError as e:
+        except PermissionError:
             raise PermissionError(f"无权限访问PDF文件: {pdf_path}")
         except Exception as e:
             raise RuntimeError(f"PDF提取意外失败: {e}")
@@ -169,7 +169,9 @@ class HierarchyRAG:
 
         # 如果文本过长，截断到合理长度
         max_tokens = 6000
-        truncated_text = page_text[:max_tokens] if len(page_text) > max_tokens else page_text
+        truncated_text = (
+            page_text[:max_tokens] if len(page_text) > max_tokens else page_text
+        )
 
         user_prompt = f"请总结以下文本：\n\n{truncated_text}"
 
@@ -177,7 +179,7 @@ class HierarchyRAG:
             summary = self.llm_client.generate_text(
                 user_prompt,
                 system_instruction=self.summary_prompt,
-                temperature=self.temperature
+                temperature=self.temperature,
             )
 
             return summary
@@ -185,7 +187,9 @@ class HierarchyRAG:
         except Exception as e:
             raise Exception(f"摘要生成失败: {e}")
 
-    def chunk_page_text(self, text: str, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def chunk_page_text(
+        self, text: str, metadata: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
         """
         将页面文本分割为重叠的详细块
 
@@ -203,22 +207,21 @@ class HierarchyRAG:
         step = self.chunk_size - self.overlap
 
         for i in range(0, len(text), step):
-            chunk_text = text[i:i + self.chunk_size]
+            chunk_text = text[i : i + self.chunk_size]
 
             # 跳过很小的块
             if chunk_text and len(chunk_text.strip()) > 50:
                 chunk_metadata = metadata.copy()
-                chunk_metadata.update({
-                    "chunk_index": len(chunks),
-                    "start_char": i,
-                    "end_char": i + len(chunk_text),
-                    "is_summary": False
-                })
+                chunk_metadata.update(
+                    {
+                        "chunk_index": len(chunks),
+                        "start_char": i,
+                        "end_char": i + len(chunk_text),
+                        "is_summary": False,
+                    }
+                )
 
-                chunks.append({
-                    "text": chunk_text,
-                    "metadata": chunk_metadata
-                })
+                chunks.append({"text": chunk_text, "metadata": chunk_metadata})
 
         return chunks
 
@@ -235,7 +238,7 @@ class HierarchyRAG:
             # 分批处理大量文本
             all_embeddings = []
             for i in range(0, len(texts), self.batch_size):
-                batch = texts[i:i + self.batch_size]
+                batch = texts[i : i + self.batch_size]
                 batch_embeddings = self.embedding_client.embed_texts(batch)
                 all_embeddings.extend(batch_embeddings)
 
@@ -271,22 +274,20 @@ class HierarchyRAG:
                 summary_metadata = page_data["metadata"].copy()
                 summary_metadata.update({"is_summary": True})
 
-                summaries.append({
-                    "text": summary_text,
-                    "metadata": summary_metadata
-                })
+                summaries.append({"text": summary_text, "metadata": summary_metadata})
 
                 # 创建详细文本块
                 page_chunks = self.chunk_page_text(
-                    page_data["text"],
-                    page_data["metadata"]
+                    page_data["text"], page_data["metadata"]
                 )
                 detailed_chunks.extend(page_chunks)
 
                 if (i + 1) % 5 == 0:
                     print(f"已处理 {i + 1} 页...")
 
-            print(f"创建了 {len(summaries)} 个摘要和 {len(detailed_chunks)} 个详细文本块")
+            print(
+                f"创建了 {len(summaries)} 个摘要和 {len(detailed_chunks)} 个详细文本块"
+            )
 
             # 生成嵌入向量
             print("正在为摘要生成嵌入向量...")
@@ -300,15 +301,19 @@ class HierarchyRAG:
             # 存储摘要到向量数据库
             print("正在存储摘要到向量数据库...")
             summary_data_list = []
-            for i, (summary, embedding) in enumerate(zip(summaries, summary_embeddings)):
-                summary_id = self._generate_summary_id(file_path, summary["metadata"]["page"])
+            for i, (summary, embedding) in enumerate(
+                zip(summaries, summary_embeddings)
+            ):
+                summary_id = self._generate_summary_id(
+                    file_path, summary["metadata"]["page"]
+                )
                 summary_data = {
                     "id": summary_id,
                     "vector": embedding,
                     "text": summary["text"],
                     "source": file_path,
                     "page": summary["metadata"]["page"],
-                    "is_summary": True
+                    "is_summary": True,
                 }
                 summary_data_list.append(summary_data)
 
@@ -319,8 +324,12 @@ class HierarchyRAG:
             # 存储详细块到向量数据库
             print("正在存储详细块到向量数据库...")
             chunk_data_list = []
-            for i, (chunk, embedding) in enumerate(zip(detailed_chunks, chunk_embeddings)):
-                chunk_id = self._generate_chunk_id(file_path, chunk["metadata"]["page"], i)
+            for i, (chunk, embedding) in enumerate(
+                zip(detailed_chunks, chunk_embeddings)
+            ):
+                chunk_id = self._generate_chunk_id(
+                    file_path, chunk["metadata"]["page"], i
+                )
                 chunk_data = {
                     "id": chunk_id,
                     "vector": embedding,
@@ -328,7 +337,7 @@ class HierarchyRAG:
                     "source": file_path,
                     "page": chunk["metadata"]["page"],
                     "chunk_index": chunk["metadata"]["chunk_index"],
-                    "is_summary": False
+                    "is_summary": False,
                 }
                 chunk_data_list.append(chunk_data)
 
@@ -343,20 +352,18 @@ class HierarchyRAG:
                 "summaries_count": len(summaries),
                 "chunks_count": len(detailed_chunks),
                 "summary_insert_result": summary_result,
-                "chunk_insert_result": chunk_result
+                "chunk_insert_result": chunk_result,
             }
 
             print(f"文档处理完成: {file_path}")
             return result
 
         except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "file_path": file_path
-            }
+            return {"success": False, "error": str(e), "file_path": file_path}
 
-    def hierarchical_search(self, query: str, k_summaries: int = None, k_chunks: int = None) -> List[Dict[str, Any]]:
+    def hierarchical_search(
+        self, query: str, k_summaries: int = None, k_chunks: int = None
+    ) -> List[Dict[str, Any]]:
         """
         执行层次化检索：首先搜索摘要，然后在相关页面中搜索详细块
 
@@ -382,14 +389,20 @@ class HierarchyRAG:
                 limit=k_summaries,
                 output_fields=["text", "source", "page"],
                 metric_type="COSINE",
-                embedding_client=self.embedding_client
+                embedding_client=self.embedding_client,
             )
 
             print(f"检索到 {len(summary_results)} 个相关摘要")
 
             # 标准化摘要结果并收集相关页面
-            normalized_summaries = [self._normalize_search_result(result) for result in summary_results]
-            relevant_pages = [summary["page"] for summary in normalized_summaries if summary["page"] is not None]
+            normalized_summaries = [
+                self._normalize_search_result(result) for result in summary_results
+            ]
+            relevant_pages = [
+                summary["page"]
+                for summary in normalized_summaries
+                if summary["page"] is not None
+            ]
 
             if not relevant_pages:
                 return []
@@ -405,11 +418,13 @@ class HierarchyRAG:
                     output_fields=["text", "source", "page", "chunk_index"],
                     metric_type="COSINE",
                     embedding_client=self.embedding_client,
-                    filter_expression=f"page == {page}"
+                    filter_expression=f"page == {page}",
                 )
 
                 # 标准化详细结果
-                normalized_page_results = [self._normalize_search_result(result) for result in page_results]
+                normalized_page_results = [
+                    self._normalize_search_result(result) for result in page_results
+                ]
                 detailed_results.extend(normalized_page_results)
 
             # 按相似度分数排序（距离越小越相似）
@@ -418,13 +433,15 @@ class HierarchyRAG:
             print(f"从相关页面检索到 {len(detailed_results)} 个详细块")
 
             # 为每个详细结果添加对应的摘要信息
-            summary_by_page = {summary["page"]: summary["text"] for summary in normalized_summaries}
+            summary_by_page = {
+                summary["page"]: summary["text"] for summary in normalized_summaries
+            }
             for result in detailed_results:
                 page_num = result["page"]
                 if page_num in summary_by_page:
                     result["summary"] = summary_by_page[page_num]
 
-            return detailed_results[:k_chunks * k_summaries]
+            return detailed_results[: k_chunks * k_summaries]
 
         except Exception as e:
             raise Exception(f"层次化搜索失败: {e}")
@@ -454,7 +471,7 @@ class HierarchyRAG:
             response = self.llm_client.generate_text(
                 user_prompt,
                 system_instruction=self.system_prompt,
-                temperature=self.temperature
+                temperature=self.temperature,
             )
 
             return response
@@ -462,7 +479,9 @@ class HierarchyRAG:
         except Exception as e:
             return f"生成回答时出错: {e}"
 
-    def query(self, question: str, k_summaries: int = None, k_chunks: int = None) -> str:
+    def query(
+        self, question: str, k_summaries: int = None, k_chunks: int = None
+    ) -> str:
         """
         完整的层次化查询流水线：搜索、准备上下文和生成响应
 
@@ -493,7 +512,9 @@ class HierarchyRAG:
                 score = result.get("score", 0.0)
 
                 if text.strip():
-                    context_parts.append(f"页面{page_num}(相似度:{score:.3f})：\n{text}")
+                    context_parts.append(
+                        f"页面{page_num}(相似度:{score:.3f})：\n{text}"
+                    )
 
                 # 限制上下文数量以控制token使用
                 if len(context_parts) >= 10:
@@ -537,7 +558,7 @@ class HierarchyRAG:
                 "page": entity.get("page"),
                 "chunk_index": entity.get("chunk_index"),
                 "distance": result.get("distance", 1.0),
-                "score": 1.0 - result.get("distance", 1.0)
+                "score": 1.0 - result.get("distance", 1.0),
             }
         else:
             return {
@@ -546,7 +567,7 @@ class HierarchyRAG:
                 "page": result.get("page"),
                 "chunk_index": result.get("chunk_index"),
                 "distance": result.get("distance", 1.0),
-                "score": 1.0 - result.get("distance", 1.0)
+                "score": 1.0 - result.get("distance", 1.0),
             }
 
 
@@ -563,7 +584,7 @@ if __name__ == "__main__":
         k_summaries=3,
         k_chunks=5,
         batch_size=64,
-        temperature=0.2
+        temperature=0.2,
     )
 
     print("层次化RAG系统初始化完成！")
@@ -576,7 +597,9 @@ if __name__ == "__main__":
 
     print("\n使用示例:")
     print("# 处理文档")
-    print("# result = hierarchy_rag.process_document_hierarchically('path/to/document.pdf')")
+    print(
+        "# result = hierarchy_rag.process_document_hierarchically('path/to/document.pdf')"
+    )
     print("# print(f'处理结果: {result}')")
     print("")
     print("# 查询")
